@@ -7,17 +7,23 @@ import org.junit.Before;
 import org.junit.Test;
 
 import my.TestClass.Something;
+import net.sf.cglib.proxy.Callback;
+import net.sf.cglib.proxy.CallbackFilter;
+import net.sf.cglib.proxy.CallbackHelper;
 import net.sf.cglib.proxy.Dispatcher;
 import net.sf.cglib.proxy.Enhancer;
 import net.sf.cglib.proxy.FixedValue;
 import net.sf.cglib.proxy.InvocationHandler;
 import net.sf.cglib.proxy.LazyLoader;
 import net.sf.cglib.proxy.MethodInterceptor;
-import net.sf.cglib.proxy.MethodProxy;
+import net.sf.cglib.proxy.NoOp;
 import net.sf.cglib.proxy.ProxyRefDispatcher;
 
-
-public class TestCGlibFeatures {
+/**
+ * http://mydailyjava.blogspot.de/2013/11/cglib-missing-manual.html
+ *
+ */
+public class TestCGlibInterceptors {
 	
 	private Enhancer enhancer;
 	
@@ -85,7 +91,6 @@ public class TestCGlibFeatures {
 	/*  Any method call will call the same InvocationHandler (can result in an endless loop) */
 	@Test(expected=RuntimeException.class)
 	public void tryInvocationHandler() throws Exception {
-	  Enhancer enhancer = new Enhancer();
 	  enhancer.setSuperclass(TestClass.class);
 	  enhancer.setCallback(new InvocationHandler() {
 	    @Override
@@ -119,7 +124,6 @@ public class TestCGlibFeatures {
 	
 	@Test
 	public void tryMethodInterceptor() throws Exception {
-	  Enhancer enhancer = new Enhancer();
 	  enhancer.setSuperclass(TestClass.class);
 	  /*enhancer.setCallback(new MethodInterceptor() {
 	    @Override
@@ -156,20 +160,19 @@ public class TestCGlibFeatures {
 	 * for future invocations of the generated proxy. . This makes sense if your object is expensive 
 	 * in its creation without knowing if the object will ever be used. 
 	 */
-	
+
 	@Test
 	public void tryLazyLoader() throws Exception {
-	  Enhancer enhancer = new Enhancer();
-	  enhancer.setSuperclass(TestClass.class);
-	  enhancer.setCallback(new LazyLoader() {
-		@Override
+		enhancer.setSuperclass(TestClass.class);
+		enhancer.setCallback(new LazyLoader() {
+			@Override
 			public Object loadObject() throws Exception {
 				return new TestClass();
-				};
-	  });
-	  TestClass proxy = (TestClass) enhancer.create();
-	  Something hh1 = proxy.getSomething();
-	  Something hh2 = proxy.getSomething();
+			};
+		});
+		TestClass proxy = (TestClass) enhancer.create();
+		Something hh1 = proxy.getSomething();
+		Something hh2 = proxy.getSomething();
 	}
 	
 	//-------Dispatcher-------
@@ -182,17 +185,16 @@ public class TestCGlibFeatures {
 	
 	@Test
 	public void tryDispatcher() throws Exception {
-	  Enhancer enhancer = new Enhancer();
-	  enhancer.setSuperclass(TestClass.class);
-	  enhancer.setCallback(new Dispatcher() {
-		@Override
+		enhancer.setSuperclass(TestClass.class);
+		enhancer.setCallback(new Dispatcher() {
+			@Override
 			public Object loadObject() throws Exception {
 				return new TestClass();
-				};
-	  });
-	  TestClass proxy = (TestClass) enhancer.create();
-	  Something hh1 = proxy.getSomething();
-	  Something hh2 = proxy.getSomething();
+			};
+		});
+		TestClass proxy = (TestClass) enhancer.create();
+		Something result1 = proxy.getSomething();
+		Something result2 = proxy.getSomething();
 	}
 	
 	//----------ProxyRefDispatcher-------
@@ -207,20 +209,104 @@ public class TestCGlibFeatures {
 	
 	@Test
 	public void tryProxyRefDispatcher() throws Exception {
-	  Enhancer enhancer = new Enhancer();
-	  enhancer.setSuperclass(TestClass.class);
-	  enhancer.setCallback(new ProxyRefDispatcher() {
-		@Override
-		public Object loadObject(Object arg0) throws Exception {
-			return bye(arg0);
+		enhancer.setSuperclass(TestClass.class);
+		enhancer.setCallback(new ProxyRefDispatcher() {
+			@Override
+			public Object loadObject(Object arg0) throws Exception {
+				return bye(arg0);
+			};
+
+			public Object bye(Object arg0) throws Exception {
+				return new TestClass("delegaated");
+			};
+		});
+
+		TestClass proxy = (TestClass) enhancer.create(); // 1 call of loadObject
+		String result = proxy.test(); // 2 call of loadObject
+		assertEquals("delegaated",result);
+	}
+	
+	
+	//--------------NoOp---------------
+	/**
+	 * NoOp delegates each method call to the enhanced class's method implementation.
+	 * NoOp doesn't make sense alone, it should only be used together with a CallbackFilter.
+	 * See more https://www.programcreek.com/java-api-examples/index.php?api=net.sf.cglib.proxy.NoOp
+     */
+	
+	
+	//---------CallbackFilter--------
+	/**
+	 * Method "accept" returns the index into the array of callbacks (as specified by {@link Enhancer#setCallbacks}) 
+	 * to use for the method.
+	 */
+	
+	@Test
+	public void tryCallbackFilter() throws Exception {
+        final Callback[] callbacks = {
+      	      NoOp.INSTANCE,
+      	      new FixedValue() {
+      				@Override
+      				public Object loadObject() throws Exception {
+      					return "Not acceptable method!";
+      				}
+      	        }
+      	      };
+        
+		CallbackFilter callbackFilter = new CallbackFilter() {
+	        @Override
+	        public int accept(final Method method) {
+	        	boolean isMethodAcceptable = false;
+	        	
+				if (method.getDeclaringClass().equals(TestClass.class) 
+						&& method.getName().equals("test")) {
+					isMethodAcceptable = true;
+				}
+				return (isMethodAcceptable) ? 0 : 1;
+	        }
+        };
+        
+        enhancer.setSuperclass(TestClass.class);
+        enhancer.setCallbackFilter(callbackFilter);
+        enhancer.setCallbacks(callbacks);
+		TestClass proxy = (TestClass) enhancer.create();
+		assertEquals("Hello world!", proxy.test(null));
+		assertEquals("Not acceptable method!", proxy.toString());
+	}
+	
+	
+	//----------CallbackHelper---------
+	/**
+	 * CallbackHelper represents a CallbackFilter and which can create an array of Callbacks for you.
+	 * The enhanced object above will be functionally equivalent to the one in the example 
+	 * for the MethodInterceptor, but it allows you to write specialized interceptors whilst 
+	 * keeping the dispatching logic to these interceptors separate.
+	 */
+	
+	@Test
+	public void tryCallbackHelper() throws Exception {
+		CallbackHelper callbackHelper = new CallbackHelper(TestClass.class, new Class[0]) {
+			@Override
+			protected Object getCallback(Method method) {
+				if (method.getDeclaringClass() != Object.class && method.getReturnType() == String.class) {
+					return new FixedValue() {
+						@Override
+						public Object loadObject() throws Exception {
+							return "Hello cglib!";
+						};
+					};
+				} else {
+					return NoOp.INSTANCE; // A singleton provided by NoOp.
+				}
+			}
 		};
-		public Object bye(Object arg0) throws Exception {
-			return new TestClass("delegaated");
-		};
-	  });
-	  
-	  TestClass proxy = (TestClass) enhancer.create(); //1 call of loadObject
-	  String v = proxy.test(); //2 call of loadObject
-	  assertEquals("delegaated", v);
+		enhancer.setSuperclass(TestClass.class);
+		enhancer.setCallbackFilter(callbackHelper);
+		enhancer.setCallbacks(callbackHelper.getCallbacks());
+		TestClass proxy = (TestClass) enhancer.create();
+		
+		assertEquals("Hello cglib!", proxy.test(null));
+		assertNotNull(proxy.hashCode()); // Does not throw an exception or result in an endless
+		// loop.
 	}
 }

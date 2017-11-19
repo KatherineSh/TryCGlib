@@ -5,7 +5,7 @@ public class TestClass {
 	String input;
 	
 	public TestClass() {
-		System.out.println("creating TestClass, hashcode=" + this.hashCode());
+		System.out.println("creating TestClass");//, hashcode=" + this.hashCode());
 	}
 	
 	public TestClass(String delegated) {
